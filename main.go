@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -37,6 +38,15 @@ func main() {
 	defer file.Close()
 
 	output := make(map[string]*weatherData)
+	chunks := make(chan []byte)
+	done := make(chan struct{})
+
+	go func() {
+		for chunk := range chunks {
+			processChunk(chunk, output)
+		}
+		close(done)
+	}()
 
 	// chunk of constant size to read from the file
 	var leftover []byte
@@ -44,13 +54,18 @@ func main() {
 	for {
 		chunk, err := readChunk(file, &leftover, chunkSize)
 		if len(chunk) > 0 {
-			processChunk(chunk, output)
+			chunks <- chunk
 		}
 		if err != nil {
+			if err != io.EOF {
+				panic(err)
+			}
 			break
 		}
 	}
 
+	close(chunks)
+	<-done
 	sortMap(output)
 }
 
