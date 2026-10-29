@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sort"
+	"sync"
 )
 
 type weatherData struct {
@@ -37,20 +39,25 @@ func main() {
 	}
 	defer file.Close()
 
+	numWorkers := runtime.NumCPU()
 	output := make(map[string]*weatherData)
-	chunks := make(chan []byte)
-	done := make(chan struct{})
+	chunks := make(chan []byte, numWorkers)
+	results := make(chan map[string]*weatherData, numWorkers)
+	var wg sync.WaitGroup
 
-	go func() {
-		for chunk := range chunks {
-			processChunk(chunk, output)
-		}
-		close(done)
-	}()
+	for i := 0; i < numWorkers; i++ {
+		wg.Go(func() {
+			localMap := make(map[string]*weatherData)
+			for chunk := range chunks {
+				processChunk(chunk, localMap)
+			}
+			results <- localMap
+		})
+	}
 
 	// chunk of constant size to read from the file
 	var leftover []byte
-	chunkSize := 16 << 20
+	chunkSize := 4 << 20
 	for {
 		chunk, err := readChunk(file, &leftover, chunkSize)
 		if len(chunk) > 0 {
@@ -65,8 +72,28 @@ func main() {
 	}
 
 	close(chunks)
-	<-done
+	wg.Wait()
+	close(results)
+
+	for localMap := range results {
+		mergeMaps(output, localMap)
+	}
 	sortMap(output)
+}
+
+func mergeMaps(output map[string]*weatherData, localMap map[string]*weatherData) {
+	for k, v := range localMap {
+
+		val, ok := output[k]
+		if ok {
+			val.min = min(val.min, v.min)
+			val.max = max(val.max, v.max)
+			val.sum += v.sum
+			val.count += v.count
+		} else {
+			output[k] = v
+		}
+	}
 }
 
 func readChunk(f *os.File, leftover *[]byte, chunkSize int) ([]byte, error) {
