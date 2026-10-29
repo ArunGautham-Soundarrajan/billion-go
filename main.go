@@ -39,34 +39,35 @@ func main() {
 	output := make(map[string]*weatherData)
 
 	// chunk of constant size to read from the file
-	buf := make([]byte, 16<<20)
-	leftover := 0
-
+	var leftover []byte
+	chunkSize := 16 << 20
 	for {
-		// file.Read() reads the file and filles the buf we passed and it
-		// keeps track where it last read. We pass in leftover in case our buffer
-		// has partial lines which we want to keep for the next read at the top and
-		// only fill the rest and not rewrite the entire buf and erase the leftover
-		n, err := file.Read(buf[leftover:])
-		total := leftover + n
-		if total == 0 {
-			break
+		chunk, err := readChunk(file, &leftover, chunkSize)
+		if len(chunk) > 0 {
+			processChunk(chunk, output)
 		}
-
-		// this is where we find the last full line and we copy the rest to the buf
-		// which copy the trailing partial line to the front of the buf so the next
-		// read continues it
-		last := bytes.LastIndexByte(buf[:total], '\n')
-		processChunk(buf[:last+1], output)
-
-		leftover = copy(buf, buf[last+1:total])
-
 		if err != nil {
 			break
 		}
 	}
 
 	sortMap(output)
+}
+
+func readChunk(f *os.File, leftover *[]byte, chunkSize int) ([]byte, error) {
+	chunk := make([]byte, chunkSize)
+	l := copy(chunk, *leftover)
+
+	n, err := f.Read(chunk[l:])
+	total := l + n
+	if total == 0 {
+		return nil, err
+	}
+
+	last := bytes.LastIndexByte(chunk[:total], '\n')
+	*leftover = append((*leftover)[:0], chunk[last+1:total]...)
+
+	return chunk[:last+1], err
 }
 
 func processChunk(chunk []byte, m map[string]*weatherData) {
